@@ -1,1 +1,4 @@
 mpii_human_pose/venv_51_mpii
+mpii_human_pose/__pycache__/
+mpii_human_pose/.python-version
+mpii_human_pose/mpii_human_pose_data
