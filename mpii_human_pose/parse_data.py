@@ -5,13 +5,13 @@ import eta.core.utils as etau
 from pathlib import Path
 import numpy as np
 from rich import print
+from PIL import Image
 
 assert focu.ensure_import(
     "scipy", error_msg="Please install the `scipy` package to load the .mat file"
 )
-import scipy.io as sio
 
-from utils import np_arr_to_dict, load_matfile_anns
+from utils import load_matfile_anns
 from utils_typing import (
     File_Annotation,
     Activity_annotation,
@@ -24,6 +24,7 @@ from utils_typing import (
     JOINT_ID,
 )
 
+# This will populate the description of the fo.Dataset fields  
 FIELD_DESCRIPTIONS = {
     "video_id": "specifies video id as is provided by YouTube. To watch video on youtube go to https://www.youtube.com/watch?v=video_list(videoidx)",
     "frame_sec": "image position in video, in seconds",
@@ -61,9 +62,8 @@ def process_body_annotations(
     np.ndarray,
     fo.Keypoints,
 ]:
-    """Keys in Body_annotation dict are all optional !
-
-    and transform it into 51 Keypoint
+    """
+    Keys in Body_annotation dict are all optional ! and transform it into 51 Keypoint
 
     Returns:
         dict: a user-friendly dict equivalent of the body_annotations parameter
@@ -74,8 +74,7 @@ def process_body_annotations(
     scale: List[float] = []
     annopoints: List[fo.Keypoint] = []
 
-    # TODO: CONVERT THIS variables MORE 51-native
-
+    # print(body_annotations)
     for body_annotation in body_annotations:
         if (
             "x1" in body_annotation
@@ -103,15 +102,22 @@ def process_body_annotations(
             body_joint_annotations = safe_empty_array_checking(body_annotation["annopoints"])
             if body_joint_annotations is not None:
                 body_joint_annotations = body_joint_annotations["point"]
+                if type(body_joint_annotations) != list:
+                    body_joint_annotations = [body_joint_annotations]
                 annopoints.append(extract_51_keypoint(body_joint_annotations, img_width, img_height))
 
     return np.array(coord_head_rect), np.array(objpos), np.array(scale), fo.Keypoints(keypoints=annopoints)
 
 
 def extract_51_keypoint(keypoints: List[Keypoint], img_width : int, img_height : int) -> fo.Keypoint:
+    # print(f'{keypoints=}')
     points = list(map(lambda x: (x["x"]/img_width, x["y"]/img_height), keypoints))
-    is_visible = list(map(lambda x: bool(x["is_visible"]) if type(x["is_visible"])==int else None, keypoints))
     joints_id = list(map(lambda x: JOINT_ID[x["id"]], keypoints))
+    
+    if "is_visible" in keypoints[0]: # if 'is_visible' is among the dict keys of one element, then its for all elements 
+        is_visible = list(map(lambda x: bool(x["is_visible"]) if type(x["is_visible"])==int else None, keypoints))
+    else:
+        is_visible = [None]*len(keypoints)
 
     return fo.Keypoint(points=points, visible=is_visible, joints_id=joints_id)
 
@@ -134,10 +140,13 @@ def parse_data(
     """
 
     # TODO: See how to leverage this
-    img_2_vid = sio.loadmat(img_2_vid_mat_file)["annolist_keyframes"]
-    img_2_vid: dict = dict(
-        map(lambda x: x[0].item()[0].item().split("/"), img_2_vid.flatten().tolist())
-    )
+    # img_2_vid = sio.loadmat(img_2_vid_mat_file)["annolist_keyframes"]
+    # img_2_vid: dict = dict(
+    #     map(lambda x: x[0].item()[0].item().split("/"), img_2_vid.flatten().tolist())
+    # )
+
+    # YES WE HAVE ANNOTATION ASSOCIATED TO IMAGE THAT DOES NOT EXIST !!!!!!!!
+    ORPHAN_ANNOTATION = {}
 
     RAW_ANNOTATIONS_DATA: File_Annotation = load_matfile_anns(matfile_path)
 
@@ -153,64 +162,70 @@ def parse_data(
     video_list: List[str] = RAW_ANNOTATIONS_DATA["video_list"].tolist()  # len()==2821
 
     samples = []
-    # with etau.ProgressBar() as pb:
-    for annotation, is_train, rectangle_id, activity in zip(
-        annolist, img_train, single_person, act
-    ):  # pb(zip(annolist.flatten(), img_train.flatten(), single_person.flatten(), act.flatten())):
+    with etau.ProgressBar(total=len(annolist), start_msg=f'Parsing raw annotations to a fiftyone.Sample format') as pb:
+        for annotation, is_train, rectangle_id, activity in pb(zip(
+            annolist, img_train, single_person, act
+        )):
+            
+            image_name = annotation["image"]["name"]
+            if not (root_imgs / image_name).exists():
+                ORPHAN_ANNOTATION[image_name] = annotation
+                print(f"Skipping annotation for {image_name} ---> does not exist on the disk")
+                continue
 
-        # ------ parse Activity_annotation
-        category_name = safe_empty_array_checking(activity["cat_name"])
-        activity_name = safe_empty_array_checking(activity["act_name"])
-        activity_id = activity["act_id"]
+            # ------ parse Activity_annotation
+            category_name = safe_empty_array_checking(activity["cat_name"])
+            activity_name = safe_empty_array_checking(activity["act_name"])
+            activity_id = activity["act_id"]
 
-        ## ------ parse Img_annotation
-        image_name = annotation["image"]["name"]
-        body_annotations = safe_empty_array_checking(annotation["annorect"])
-        video_idx = safe_empty_array_checking(annotation["vididx"])
-        frame_sec = safe_empty_array_checking(annotation["frame_sec"])
+            ## ------ parse Img_annotation
+            body_annotations = safe_empty_array_checking(annotation["annorect"])
+            video_idx = safe_empty_array_checking(annotation["vididx"])
+            frame_sec = safe_empty_array_checking(annotation["frame_sec"])
 
-        ## ------ parse Body_annotation
-        img_path = root_imgs / image_name
-        IMAGE_DIM = {
-            "width": ,
-            "height": ,
-        }
+            ## ------ parse Body_annotation
+            img_path = root_imgs / image_name
 
-        if type(body_annotations) != list and type is not None:
-            body_annotations = [body_annotations]
-            coord_head_rect, objpos, scale, annopoints = process_body_annotations(body_annotations, IMAGE_DIM["width"], IMAGE_DIM["height"])
+            IMAGE_WIDTH, IMAGE_HEIGHT = Image.open(img_path).size
 
-        # ---------------- CREATING 51-SAMPLE
-        sample = fo.Sample(
-            filepath=str(img_path), 
-            tags=["train" if is_train else "test"]
-        )
+            # print(f'{body_annotations=}')
+            if body_annotations is not None:
+                if type(body_annotations) != list :
+                    body_annotations = [body_annotations]
+                coord_head_rect, objpos, scale, annopoints = process_body_annotations(body_annotations, IMAGE_WIDTH, IMAGE_HEIGHT)
+
+            # ---------------- CREATING 51-SAMPLE
+            sample = fo.Sample(
+                filepath=str(img_path), 
+                tags=["train" if is_train else "test"]
+            )
 
 
-        sample["video_id"] = video_list[video_idx] if video_idx is not None else None
+            sample["video_id"] = video_list[video_idx-1] if video_idx is not None else None
 
-        sample["frame_sec"] = frame_sec
+            sample["frame_sec"] = frame_sec
 
-        sample["rectangle_id"] = rectangle_id
+            sample["rectangle_id"] = [rectangle_id] if type(rectangle_id) == int else rectangle_id
 
-        # TODO: use fo.Classification
-        sample["activity"] = {
-            "activity_name": activity_name,
-            "category_name": category_name,
-            "activity_id": activity_id,
-        }
+            # TODO: use fo.Classification
+            sample["activity"] = {
+                "activity_name": activity_name,
+                "category_name": category_name,
+                "activity_id": activity_id,
+            }
 
-        # TODO: use fo.Detection : but need to convert x,y,x,y -> x,y,w,h 
-        sample["head_rect"] = coord_head_rect
+            # TODO: use fo.Detection : but need to convert x,y,x,y -> x,y,w,h
+            # print(f'{coord_head_rect.shape=}') 
+            sample["head_rect"] =  coord_head_rect if coord_head_rect.size != 0 else None
 
-        sample["objpos"] = objpos
+            sample["objpos"] = objpos
 
-        sample["scale"] = scale
+            sample["scale"] = scale
 
-        import pdb; pdb.set_trace()
-        sample["annopoints"] = annopoints
+            # import pdb; pdb.set_trace()
+            sample["annopoints"] = annopoints
 
-        samples.append(sample)
+            samples.append(sample)
         
 
     dataset = fo.Dataset("MPII Human Pose")
@@ -220,9 +235,11 @@ def parse_data(
         "MPII Human Pose",
     ]
 
+    dataset.persistent = True
+
     add_field_descriptions(dataset)
 
-    return dataset
+    return dataset, ORPHAN_ANNOTATION
 
 def add_field_descriptions(dataset: fo.Dataset):
     global FIELD_DESCRIPTIONS
@@ -241,4 +258,8 @@ if __name__ == "__main__":
     path_img_2_vid_matfile = root_path / "mpii_human_pose_v1_sequences_keyframes.mat"
     path_imgs = root_path / "images"
 
-    parse_data(path_anns_matfile, path_imgs, path_img_2_vid_matfile)
+    mpiiHP_51_dataset, orphan_anns = parse_data(path_anns_matfile, path_imgs, path_img_2_vid_matfile)
+    print(len(orphan_anns))
+    print(orphan_anns)
+    print(mpiiHP_51_dataset)
+

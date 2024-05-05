@@ -1,64 +1,8 @@
 from pathlib import Path
 import scipy.io as sio
 import numpy as np
-from tqdm import tqdm
 from rich import print
-
-def not_contain_nested_obj(arr) -> bool:
-    """Check if a numpy array is not nested
-
-    Args:
-        arr (_type_): np array
-
-    Returns:
-        bool: True if the array is not nested, False otherwise
-    """
-    return not arr.dtype.hasobject
-
-
-def np_arr_to_dict(arr) -> dict:
-    """convert a numpy array with nested 'O' dtype items.
-
-    Args:
-        arr (_type_): np array
-
-    Example :
-     array_to_process = array([[(array([[3.88073395]]), array([[(array([[601]], dtype=uint16), array([[380]], dtype=uint16))]],
-              dtype=[('x', 'O'), ('y', 'O')]))                                                         ]],
-      dtype=[('scale', 'O'), ('objpos', 'O')])
-
-      # should output
-      {
-        'scale': 3.88073395,
-        'objpos': {
-            'x': 601,
-            'y': 380
-        }
-      }
-
-    Returns:
-        dict: dict result of the conversion
-    """
-    import pdb;pdb.set_trace()
-
-    
-    if not_contain_nested_obj(arr):
-        return arr.item() if arr.size == 1 else None
-
-    # exploding array in dict of str : np_array
-    res = []
-    for row in arr:
-        res.append(
-            dict(zip(arr.dtype.names, row))
-        )
-
-    # recursively converting the nested arrays
-    for i, row in tqdm(enumerate(res), desc="Processing nested arrays"):
-        for key, value in row.items():
-            res[i][key] = np_arr_to_dict(value)
-
-    return res
-
+import time
 
 def load_matfile_anns(matfile_path: Path) -> dict:
     """Load the .mat file containing annotations (should be called `mpii_human_pose_v1_u12_1.mat`)
@@ -71,7 +15,10 @@ def load_matfile_anns(matfile_path: Path) -> dict:
     Returns:
         np.ndarray: np array containing the annotations
     """
+    print(f"Loading annotations file from {matfile_path}")
+    time_it = time.time()
     annotations_file: np.ndarray = sio.loadmat(matfile_path, simplify_cells=True)["RELEASE"]
+    print(f"Loaded annotations file in {time.time()-time_it} seconds")
 
     if tuple(annotations_file.keys()) != (
         "annolist",
@@ -87,25 +34,3 @@ def load_matfile_anns(matfile_path: Path) -> dict:
 
     return annotations_file
 
-
-if __name__ == "__main__":
-    import numpy as np
-
-    root_path = Path(
-        "/home/lolo/Documents/51_contribution/mpii_human_pose/mpii_human_pose_data"
-    )
-
-    path_anns_matfile = (
-        root_path / "mpii_human_pose_v1_u12_2" / "mpii_human_pose_v1_u12_1.mat"
-    )
-    path_img_2_vid_matfile = root_path / "mpii_human_pose_v1_sequences_keyframes.mat"
-    path_imgs = root_path / "images"
-
-    annotations_file: np.ndarray = load_matfile_anns(path_anns_matfile)
-
-    # ((1, 24987), (1, 24987), (1,), (24987, 1), (24987, 1), (1, 2821)
-    annolist, img_train, _, single_person, act, video_list = annotations_file.item()
-
-    import pdb; pdb.set_trace()
-
-    print(np_arr_to_dict(video_list.flatten()))

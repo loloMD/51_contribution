@@ -77,7 +77,7 @@ class Keypoint(TypedDict):
 
 
 class Keypoint_annotation(TypedDict):
-    point: Union[List[Keypoint], Keypoint]  # len: 16
+    point: Union[List[Keypoint], Keypoint]  # !!!! NOT ALWAYS LEN 16 (even can have 1 keypoint) !!!!
 
 
 class Body_annotation(TypedDict):  # body annotations for a person ridx
@@ -132,7 +132,7 @@ class Img_annotation(TypedDict):
     annorect: Union[
         List[Body_annotation], Body_annotation, np.ndarray
     ]  # if np.ndarray ---> `array([], dtype=uint8)`
-    vididx: Union[int, np.ndarray]  # int 1-2821 OR `array([], dtype=float64)`
+    vididx: Union[int, np.ndarray]  # int 1-2821 OR `array([], dtype=float64)` (!!!! STARTING FROM 1 !!!!!!)
     frame_sec: Union[float, np.ndarray]  # int OR `array([], dtype=float64)`
 
 
