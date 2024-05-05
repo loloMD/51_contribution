@@ -57,8 +57,8 @@ def process_body_annotations(
     img_width: int,
     img_height: int,
 ) -> Tuple[
-    np.ndarray,
-    np.ndarray,
+    fo.Detections,
+    fo.Keypoints,
     np.ndarray,
     fo.Keypoints,
 ]:
@@ -69,8 +69,8 @@ def process_body_annotations(
         dict: a user-friendly dict equivalent of the body_annotations parameter
     """
 
-    coord_head_rect: List[List[int]] = []
-    objpos: List[List[int]] = []
+    coord_head_rect: List[fo.Detection] = []
+    objpos: List[fo.Keypoint] = []
     scale: List[float] = []
     annopoints: List[fo.Keypoint] = []
 
@@ -80,18 +80,21 @@ def process_body_annotations(
             "x1" in body_annotation
         ):  # if 'x1' in dict keys, then 'x2', 'y1', 'y2' are also in the dict
             coord_head_rect.append(
-                [
-                    body_annotation["x1"],
-                    body_annotation["y1"],
-                    body_annotation["x2"],
-                    body_annotation["y2"],
-                ]
+                fo.Detection(
+                    label="person",
+                    bounding_box=[
+                        body_annotation["x1"]/img_width,
+                        body_annotation["y1"]/img_height,
+                        (body_annotation["x2"]-body_annotation["x1"])/img_width,
+                        (body_annotation["y2"]-body_annotation["y1"])/img_height,
+                    ],
+                )
             )   
 
         if "objpos" in body_annotation:
             objpos_item = safe_empty_array_checking(body_annotation["objpos"])
             if objpos_item is not None:
-                objpos.append([objpos_item["x"], objpos_item["y"]])
+                objpos.append(fo.Keypoint(points=[(objpos_item["x"]/img_width, objpos_item["y"]/img_height)]))
 
         if "scale" in body_annotation:
             scale_item = safe_empty_array_checking(body_annotation["scale"])
@@ -104,12 +107,11 @@ def process_body_annotations(
                 body_joint_annotations = body_joint_annotations["point"]
                 if type(body_joint_annotations) != list:
                     body_joint_annotations = [body_joint_annotations]
-                annopoints.append(extract_51_keypoint(body_joint_annotations, img_width, img_height))
+                annopoints.append(extract_51_keypoint_body_ann(body_joint_annotations, img_width, img_height))
 
-    return np.array(coord_head_rect), np.array(objpos), np.array(scale), fo.Keypoints(keypoints=annopoints)
+    return fo.Detections(detections=coord_head_rect), fo.Keypoints(keypoints=objpos), np.array(scale), fo.Keypoints(keypoints=annopoints)
 
-
-def extract_51_keypoint(keypoints: List[Keypoint], img_width : int, img_height : int) -> fo.Keypoint:
+def extract_51_keypoint_body_ann(keypoints: List[Keypoint], img_width : int, img_height : int) -> fo.Keypoint:
     # print(f'{keypoints=}')
     points = list(map(lambda x: (x["x"]/img_width, x["y"]/img_height), keypoints))
     joints_id = list(map(lambda x: JOINT_ID[x["id"]], keypoints))
@@ -145,9 +147,6 @@ def parse_data(
     #     map(lambda x: x[0].item()[0].item().split("/"), img_2_vid.flatten().tolist())
     # )
 
-    # YES WE HAVE ANNOTATION ASSOCIATED TO IMAGE THAT DOES NOT EXIST !!!!!!!!
-    ORPHAN_ANNOTATION = {}
-
     RAW_ANNOTATIONS_DATA: File_Annotation = load_matfile_anns(matfile_path)
 
     annolist = RAW_ANNOTATIONS_DATA["annolist"]
@@ -161,8 +160,12 @@ def parse_data(
     act = RAW_ANNOTATIONS_DATA["act"]
     video_list: List[str] = RAW_ANNOTATIONS_DATA["video_list"].tolist()  # len()==2821
 
+    # YES WE HAVE ANNOTATION ASSOCIATED TO IMAGE THAT DOES NOT EXIST !!!!!!!!
+    ORPHAN_ANNOTATION = {}
+
     samples = []
-    with etau.ProgressBar(total=len(annolist), start_msg=f'Parsing raw annotations to a fiftyone.Sample format') as pb:
+
+    with etau.ProgressBar(total=len(annolist), start_msg=f'Parsing raw annotations to fiftyone.Sample formats') as pb:
         for annotation, is_train, rectangle_id, activity in pb(zip(
             annolist, img_train, single_person, act
         )):
@@ -207,22 +210,20 @@ def parse_data(
 
             sample["rectangle_id"] = [rectangle_id] if type(rectangle_id) == int else rectangle_id
 
-            # TODO: use fo.Classification
-            sample["activity"] = {
-                "activity_name": activity_name,
-                "category_name": category_name,
-                "activity_id": activity_id,
-            }
+            sample["activity"] = fo.Classifications(
+                classifications=[
+                    fo.Classification(label=activity_name),
+                    fo.Classification(label=category_name),
+                    # fo.Classification(label=str(activity_id)),
+                ]
+            )
 
-            # TODO: use fo.Detection : but need to convert x,y,x,y -> x,y,w,h
-            # print(f'{coord_head_rect.shape=}') 
-            sample["head_rect"] =  coord_head_rect if coord_head_rect.size != 0 else None
+            sample["head_rect"] =  coord_head_rect
 
             sample["objpos"] = objpos
 
             sample["scale"] = scale
 
-            # import pdb; pdb.set_trace()
             sample["annopoints"] = annopoints
 
             samples.append(sample)
